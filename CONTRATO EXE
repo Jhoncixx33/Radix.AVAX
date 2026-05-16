@@ -1,0 +1,32 @@
+// SPDX-License-Identifier: MIT
+// Compatible with OpenZeppelin Contracts ^5.6.0
+pragma solidity ^0.8.27;
+
+import {AccessManagedUpgradeable} from "@openzeppelin/contracts-upgradeable/access/manager/AccessManagedUpgradeable.sol";
+import {ERC20Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import {ERC20FlashMintUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20FlashMintUpgradeable.sol";
+import {ERC20PermitUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
+import {Initializable} from "@openzeppelin/contracts/proxy/utils/Initializable.sol";
+
+contract Radix is Initializable, ERC20Upgradeable, AccessManagedUpgradeable, ERC20PermitUpgradeable, ERC20FlashMintUpgradeable {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(address recipient, address initialAuthority)
+        public
+        initializer
+    {
+        __ERC20_init("Radix", "RYX");
+        __AccessManaged_init(initialAuthority);
+        __ERC20Permit_init("Radix");
+        __ERC20FlashMint_init();
+
+        _mint(recipient, 1000 * 10 ** decimals());
+    }
+
+    function mint(address to, uint256 amount) public restricted {
+        _mint(to, amount);
+    }
+}
