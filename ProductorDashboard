@@ -1,0 +1,98 @@
+// src/components/dashboard/ProductorDashboard.tsx
+import { useState } from "react";
+import NFTPassportCard from "./NFTPassportCard";
+import PaymentAction from "./PaymentAction";
+import TimelineView from "../historial/TimelineView";
+
+/**
+ * @notice Dashboard principal del productor.
+ *         Muestra el NFT del lote activo, los puntos de control
+ *         y la acción de pago confidencial (simulación).
+ * @dev En producción se integraría con wagmi / ethers.js para lectura
+ *      y escritura de los contratos PasaporteVerde y MockeERC20.
+ */
+export default function ProductorDashboard() {
+  // ============ ESTADO SIMULADO ============
+  // TODO: Reemplazar con useAccount() de wagmi para obtener la wallet real
+  const [productorAddress] = useState("0xProductor...ABC123");
+
+  // TODO: Obtener tokenId y metadata desde el contrato con useContractRead
+  const [lote] = useState({
+    tokenId: 1,
+    tokenURI: "ipfs://QmPasaporte123/metadata.json",
+    nombre: "Café Geisha – Finca El Encanto",
+    fechaRegistro: "2026-05-01",
+  });
+
+  // Puntos de control mock (se obtendrían con useContractRead)
+  const [checkpoints] = useState([
+    { descripcion: "Cosecha manual", timestamp: "2026-05-02", operador: "0xOper...1A2B" },
+    { descripcion: "Beneficio lavado", timestamp: "2026-05-05", operador: "0xOper...3C4D" },
+    { descripcion: "Embarque", timestamp: "2026-05-10", operador: "0xOper...5E6F" },
+  ]);
+
+  // Estado del pago (simulado)
+  const [pagado, setPagado] = useState(false);
+
+  // ============ ACCIÓN DE PAGO SIMULADA ============
+  /**
+   * Simula la recepción de un pago confidencial vía x402.
+   * En producción, se llamaría a useContractWrite para invocar
+   * procesarPagoX402 del contrato PasaporteVerde.
+   */
+  const handleRecibirPago = () => {
+    // TODO: Ejecutar writeContract de wagmi:
+    // const { write } = useContractWrite({
+    //   address: pasaporteVerdeAddress,
+    //   abi: pasaporteVerdeABI,
+    //   functionName: 'procesarPagoX402',
+    //   args: [lote.tokenId, ethers.utils.parseEther('100')],
+    // });
+    // O mediante x402 HTTP hook.
+    alert("✔ Pago confidencial simulado – transferConfidencial ejecutado (mock).");
+    setPagado(true);
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-b from-green-50 to-white p-6">
+      <Navbar productorAddress={productorAddress} />
+
+      <div className="max-w-7xl mx-auto mt-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Columna izquierda: Pasaporte NFT */}
+        <div className="lg:col-span-1">
+          <NFTPassportCard lote={lote} />
+        </div>
+
+        {/* Columna central: Historial de trazabilidad */}
+        <div className="lg:col-span-1">
+          <TimelineView checkpoints={checkpoints} />
+        </div>
+
+        {/* Columna derecha: Liquidación y pago */}
+        <div className="lg:col-span-1">
+          <PaymentAction
+            pagado={pagado}
+            onRecibirPago={handleRecibirPago}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ----------- Componentes hijos (mínimos) -----------
+
+/** Barra superior con dirección del productor */
+function Navbar({ productorAddress }: { productorAddress: string }) {
+  return (
+    <nav className="flex items-center justify-between bg-white shadow-sm p-4 rounded-xl">
+      <h1 className="text-xl font-bold text-green-800">Radix Trace</h1>
+      <div className="flex items-center gap-2">
+        <span className="text-sm text-gray-600">Conectado:</span>
+        <span className="text-sm font-mono bg-gray-100 px-3 py-1 rounded-full truncate max-w-[200px]">
+          {productorAddress}
+        </span>
+      </div>
+    </nav>
+  );
+}
