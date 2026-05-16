@@ -1,5 +1,6 @@
 #🌿 Radix.AVAX
 Infraestructura descentralizada sobre Avalanche para trazabilidad agrícola sustentable y comercio justo en Latinoamérica
+
 BY:Shadow Garden - 2026
 
 Radix Trace es la columna vertebral Web3 del proyecto Radix.AVAX. Combina identidad digital de lotes (NFT), pagos instantáneos nativos x402 y privacidad financiera mediante eERC20 para empoderar a los pequeños productores de café y cacao, eliminando intermediarios y protegiendo su rentabilidad.
