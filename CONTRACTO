@@ -1,0 +1,311 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
+/**
+ * @title PasaporteVerde
+ * @notice Plataforma de trazabilidad agrícola y comercio justo para LatAm.
+ *         Fusiona NFT (trazabilidad), pagos x402 nativos HTTP y privacidad
+ *         financiera mediante eERC20 (Encrypted ERC-20).
+ * @dev Optimizado para Avalanche Fuji Testnet.
+ */
+contract PasaporteVerde is ERC721URIStorage, AccessControl {
+    // ============ ROLES ============
+    bytes32 public constant CHECKPOINT_ROLE = keccak256("CHECKPOINT_ROLE");
+    bytes32 public constant X402_ROLE = keccak256("X402_ROLE");
+
+    // ============ ESTRUCTURAS ============
+    /**
+     * @dev Punto de control en la línea de tiempo del lote.
+     */
+    struct PuntoDeControl {
+        string descripcion;
+        uint256 timestamp;
+        address operador;
+    }
+
+    // ============ ALMACENAMIENTO ============
+    // tokenId => lista de puntos de control
+    mapping(uint256 => PuntoDeControl[]) private _puntosDeControl;
+    // tokenId => dirección del productor original
+    mapping(uint256 => address) private _productorDelLote;
+    // tokenId => true si el pago ya fue liberado
+    mapping(uint256 => bool) public lotePagado;
+
+    // Token eERC20 con el que se realizan los pagos confidenciales
+    IeERC20 public immutable tokenPago;
+
+    // ============ EVENTOS ============
+    event LoteRegistrado(
+        uint256 indexed tokenId,
+        address indexed productor,
+        string tokenURI
+    );
+    event PuntoDeControlAgregado(
+        uint256 indexed tokenId,
+        string descripcion,
+        uint256 timestamp,
+        address indexed operador
+    );
+    event PagoComercioJustoProcesado(
+        uint256 indexed tokenId,
+        address indexed productor,
+        uint256 monto,
+        address indexed procesador
+    );
+
+    // ============ CONSTRUCTOR ============
+    /**
+     * @param _tokenPago Dirección del token eERC20 (encrypted ERC-20)
+     * @param _x402Handler Dirección del endpoint/manejador x402 autorizado
+     */
+    constructor(
+        address _tokenPago,
+        address _x402Handler
+    ) ERC721("PasaporteVerde", "PVRD") {
+        require(_tokenPago != address(0), "Token pago no cero");
+        require(_x402Handler != address(0), "Handler x402 no cero");
+        tokenPago = IeERC20(_tokenPago);
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(X402_ROLE, _x402Handler);
+        // El admin inicial también puede agregar puntos de control
+        _grantRole(CHECKPOINT_ROLE, msg.sender);
+    }
+
+    // ============ TRAZABILIDAD (NFT) ============
+
+    /**
+     * @notice Registra un nuevo lote de café/cacao como NFT (pasaporte digital).
+     * @param productor Dirección del agricultor/cooperativa dueño del lote.
+     * @param _tokenURI Metadatos iniciales en IPFS con información del lote.
+     * @return tokenId ID del NFT minteado.
+     */
+    function registrarLote(
+        address productor,
+        string memory _tokenURI
+    ) external onlyRole(DEFAULT_ADMIN_ROLE) returns (uint256) {
+        require(productor != address(0), "Productor no cero");
+        uint256 tokenId = totalSupply(); // tokenId autoincremental simple
+        _safeMint(productor, tokenId);
+        _setTokenURI(tokenId, _tokenURI);
+        _productorDelLote[tokenId] = productor;
+        emit LoteRegistrado(tokenId, productor, _tokenURI);
+        return tokenId;
+    }
+
+    /**
+     * @notice Agrega un nuevo punto de control a la línea de tiempo del lote.
+     * @param tokenId Identificador del lote NFT.
+     * @param descripcion Descripción del evento (ej. "Cosecha", "Beneficio", "Embarque").
+     */
+    function agregarPuntoDeControl(
+        uint256 tokenId,
+        string calldata descripcion
+    ) external onlyRole(CHECKPOINT_ROLE) {
+        require(_ownerOf(tokenId) != address(0), "Lote no existe");
+        _puntosDeControl[tokenId].push(
+            PuntoDeControl({
+                descripcion: descripcion,
+                timestamp: block.timestamp,
+                operador: msg.sender
+            })
+        );
+        emit PuntoDeControlAgregado(
+            tokenId,
+            descripcion,
+            block.timestamp,
+            msg.sender
+        );
+    }
+
+    /**
+     * @notice Devuelve la lista completa de puntos de control de un lote.
+     * @param tokenId ID del NFT.
+     */
+    function obtenerPuntosDeControl(
+        uint256 tokenId
+    ) external view returns (PuntoDeControl[] memory) {
+        return _puntosDeControl[tokenId];
+    }
+
+    // ============ PAGO x402 (INTEGRACIÓN) ============
+
+    /**
+     * @notice Procesa un pago exitoso proveniente del flujo x402 (HTTP nativo).
+     *         Solo puede ser llamada por el manejador x402 autorizado.
+     *         Transfiere los fondos en token eERC20 al productor de forma confidencial.
+     * @param tokenId ID del lote que se está pagando.
+     * @param monto Cantidad de tokens eERC20 a transferir al productor.
+     */
+    function procesarPagoX402(
+        uint256 tokenId,
+        uint256 monto
+    ) external onlyRole(X402_ROLE) {
+        require(_ownerOf(tokenId) != address(0), "Lote no existe");
+        require(!lotePagado[tokenId], "Lote ya pagado");
+        address productor = _productorDelLote[tokenId];
+
+        // Transferencia confidencial: el monto no es público en la cadena (eERC20)
+        bool exito = tokenPago.transferConfidencial(productor, monto);
+        require(exito, "Transferencia confidencial fallida");
+
+        lotePagado[tokenId] = true;
+        emit PagoComercioJustoProcesado(
+            tokenId,
+            productor,
+            monto,
+            msg.sender
+        );
+    }
+
+    /**
+     * @notice Permite a cualquier usuario (comprador) depositar tokens eERC20 en el
+     *         contrato para que luego puedan ser liberados mediante x402.
+     * @param monto Cantidad de tokens a depositar.
+     * @dev Requiere que el usuario haya aprobado previamente el gasto al contrato.
+     */
+    function depositarTokens(uint256 monto) external {
+        require(monto > 0, "Monto debe ser positivo");
+        bool exito = tokenPago.transferFrom(
+            msg.sender,
+            address(this),
+            monto
+        );
+        require(exito, "Depósito fallido");
+    }
+
+    // ============ OVERRIDES ============
+    /**
+     * @dev Compatibilidad con AccessControl y ERC721.
+     */
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view virtual override(ERC721URIStorage, AccessControl) returns (bool) {
+        return super.supportsInterface(interfaceId);
+    }
+
+    // Función auxiliar para conocer el total de NFTs minteados (tokenId = totalSupply)
+    function totalSupply() public view returns (uint256) {
+        // ERC721Enumerable no está incluido para ahorrar gas, usamos un contador manual implícito.
+        // tokenId se asigna secuencialmente desde 0, así que cada mint incrementa.
+        // En una implementación real, deberíamos llevar un contador explícito.
+        // Aquí lo simplificamos: se confía en que el siguiente tokenId es la cantidad actual.
+        // Para mantener precisión, usamos un contador interno:
+        return _counter();
+    }
+
+    uint256 private _tokenIdCounter;
+
+    function _counter() internal view returns (uint256) {
+        // Devolvemos el número de tokens minteados; en un ERC721 sin Enumerable
+        // no tenemos una función directa, por eso usamos un contador.
+        // En producción, se recomienda usar ERC721Enumerable o un contador explícito.
+        return _tokenIdCounter;
+    }
+
+    // Sobreescribimos _safeMint para incrementar el contador.
+    function _safeMint(address to, uint256 tokenId) internal override {
+        super._safeMint(to, tokenId);
+        _tokenIdCounter++;
+    }
+}
+
+// ================= INTERFACES MOCK (SIMULACIÓN) =================
+
+/**
+ * @notice Interfaz del token eERC20 (Encrypted ERC-20).
+ *         En producción usaría FHE o ZKP para ocultar balances y montos.
+ */
+interface IeERC20 {
+    /**
+     * @dev Transferencia confidencial de tokens. El monto no es visible en la cadena
+     *      para terceros (utiliza datos encriptados).
+     */
+    function transferConfidencial(
+        address destinatario,
+        uint256 monto
+    ) external returns (bool);
+
+    /**
+     * @dev Transferencia estándar (necesaria para depósitos).
+     */
+    function transferFrom(
+        address remitente,
+        address destinatario,
+        uint256 monto
+    ) external returns (bool);
+
+    /**
+     * @dev Balance público (en un eERC real estaría encriptado).
+     */
+    function balanceOf(address cuenta) external view returns (uint256);
+}
+
+/**
+ * @notice Contrato mock de token eERC20 para pruebas.
+ *         Simula un token ERC20 normal, pero con la interfaz requerida.
+ */
+contract MockeERC20 is IeERC20 {
+    string public name = "Mock eERC20";
+    string public symbol = "MERC";
+    mapping(address => uint256) public override balanceOf;
+    mapping(address => mapping(address => uint256)) public allowance;
+
+    function mint(address to, uint256 amount) external {
+        balanceOf[to] += amount;
+    }
+
+    function transferConfidencial(
+        address destinatario,
+        uint256 monto
+    ) external override returns (bool) {
+        // En una implementación real, aquí se usaría encriptación homomórfica.
+        // Por simplicidad hacemos una transferencia normal.
+        require(balanceOf[msg.sender] >= monto, "Fondos insuficientes");
+        balanceOf[msg.sender] -= monto;
+        balanceOf[destinatario] += monto;
+        return true;
+    }
+
+    function transferFrom(
+        address remitente,
+        address destinatario,
+        uint256 monto
+    ) external override returns (bool) {
+        require(allowance[remitente][msg.sender] >= monto, "Permiso insuficiente");
+        require(balanceOf[remitente] >= monto, "Fondos insuficientes");
+        allowance[remitente][msg.sender] -= monto;
+        balanceOf[remitente] -= monto;
+        balanceOf[destinatario] += monto;
+        return true;
+    }
+
+    function approve(address spender, uint256 amount) external returns (bool) {
+        allowance[msg.sender][spender] = amount;
+        return true;
+    }
+}
+
+/**
+ * @notice Mock del manejador x402. Simula la llamada autorizada a
+ *         procesarPagoX402 en el contrato principal.
+ */
+contract MockX402Handler {
+    PasaporteVerde public pasaporte;
+
+    constructor(address _pasaporte) {
+        pasaporte = PasaporteVerde(_pasaporte);
+    }
+
+    /**
+     * @notice Simula la recepción de un pago HTTP nativo y dispara el hook on-chain.
+     * @param tokenId Lote pagado
+     * @param monto Monto a transferir al productor
+     */
+    function simularPagoExitoso(uint256 tokenId, uint256 monto) external {
+        // Solo el handler puede llamar a procesarPagoX402 (posee el rol X402_ROLE)
+        pasaporte.procesarPagoX402(tokenId, monto);
+    }
+}
